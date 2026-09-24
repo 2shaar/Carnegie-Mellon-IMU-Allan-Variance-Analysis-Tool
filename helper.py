@@ -1,11 +1,7 @@
 import numpy as np
-import random
 import scipy
-from numpy import sqrt, log10, pi
 from numpy import log as ln
-from matplotlib import pyplot as plt
-
-random.seed(0)  # for determinism
+from numpy import pi, sqrt
 
 
 def chi_squared_confidence_interval(sigma, dof, confidence=0.95):
@@ -46,29 +42,3 @@ def predict_adev(taus, sigma_white, sigma_flicker, sigma_walk):
 
 def get_bias_instability(taus, sigma_white, sigma_flicker, sigma_walk):
     return min(predict_adev(taus, sigma_white, sigma_flicker, sigma_walk))
-
-
-def plot_line_on_loglog(ax, taus, m, b, color, label=""):
-    adjust_ylim = m == 0.0  # don't let drawing a line screw up the axes unless if it is a horizontal line
-
-    ylim = ax.get_ylim()
-    taus_plotted = []
-    adevs = []
-    for log10_tau in np.log10(taus):
-        log10_adev = m * log10_tau + b
-        adev = 10**log10_adev
-        tau = 10**log10_tau
-        taus_plotted.append(tau)
-        adevs.append(adev)
-    ax.plot(taus_plotted, adevs, label=label, linestyle="--", color=color, linewidth=0.5)
-    if not adjust_ylim:
-        ax.set_ylim(ylim)  # restore original y limits
-
-
-def plot_noise_lines(ax, taus, sigma_white, sigma_flicker, sigma_walk):
-    if sigma_white != 0.0:
-        plot_line_on_loglog(ax, taus, -0.5, log10(sigma_white), "fuchsia", "Additive White Noise")
-    if sigma_flicker != 0.0:
-        plot_line_on_loglog(ax, taus, 0.0, 0.5 * log10((sigma_flicker**2) * 2 * ln(2) / pi), "grey", "Flicker Noise")
-    if sigma_walk != 0.0:
-        plot_line_on_loglog(ax, taus, 0.5, log10(sigma_walk) - 0.5 * np.log10(3), "lime", "Bias Random Walk")

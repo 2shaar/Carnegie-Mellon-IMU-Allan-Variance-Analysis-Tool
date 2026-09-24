@@ -1,42 +1,28 @@
-# example usage:  python3 computeIMUNoiseParams.py FILENAME.csv
-# GYRO DATA MUST BE IN rad/sec
-# ACCEL DATA MUST BE IN m/s^2
-
-import os
+import argparse
 import sys
-from math import sqrt
+from pathlib import Path
 
 import numpy as np
 from matplotlib import pyplot as plt
 from pandas import read_csv
-from plot_utils import hist, save_figure
 
 from AllanVariance import AVAR
-from helper import plot_noise_lines, predict_adev
+from helper import predict_adev
+from plot_utils import hist, plot_noise_lines, save_figure
 
 plt.rcParams["font.family"] = "serif"
 plt.rcParams["mathtext.fontset"] = "cm"
 
-USE_CACHE = 0  # TODO Remove me
+
+parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+parser.add_argument("--csv", type=str)
+args = parser.parse_args()
 
 
 #####################################################################################################
 # Reading data file passed in to cmd line
-received_args = len(sys.argv) - 1
-if received_args != 1:
-    print("Expected exactly 1 argument (file path) but received {received_args}")
-    exit(1)
-
-imu_csv_filepath = os.path.realpath(sys.argv[1])
-imu_csv_filename = os.path.basename(imu_csv_filepath)
-imu_csv_file_dirpath = os.path.dirname(imu_csv_filepath)
-
-results_dirpath = os.path.join(
-    imu_csv_file_dirpath,
-    "Allan_Variance_Analysis_Results_"
-    + os.path.splitext(imu_csv_filename.replace(" ", "_"))[0],  # strip file extension
-)
-os.system(f"mkdir -p '{results_dirpath}'")
+imu_csv_filepath = Path(args.csv)
+assert imu_csv_filepath.exists()
 
 
 class Logger(object):
@@ -57,76 +43,68 @@ class Logger(object):
 
 
 #####################################################################################################
-if not USE_CACHE:
-    print(f"Loading data from {imu_csv_filepath}")
+results_dirpath = (
+    imu_csv_filepath.parent / f"Allan_Variance_Analysis_Results_{str(imu_csv_filepath.stem).replace(" ", "_")}"
+)
+results_dirpath.mkdir(parents=True, exist_ok=True)
 
-    my_data = read_csv(imu_csv_filepath, sep=",").values
-    t = my_data[:, 0]
-    t -= t[0]
-    data_dict = {
-        "Gyroscope": [my_data[:, 1], my_data[:, 2], my_data[:, 3]],
-        "Accelerometer": [my_data[:, 4], my_data[:, 5], my_data[:, 6]],
-    }
+print(f"Loading data from {imu_csv_filepath}")
 
-    print("Done loading data")
+my_data = read_csv(imu_csv_filepath, sep=",")
+t = my_data["Time [s]"]
+t -= t[0]
+data_dict = {
+    "Gyroscope": [my_data[f"Gyroscope {axis} [rad/s]"] for axis in "xyz"],
+    "Accelerometer": [my_data[f"Accelerometer {axis} [m/s^2]"] for axis in "xyz"],
+}
 
-    # visualizing the distribution of dts between samples for real imu data
-    plt.figure(figsize=(8, 6), dpi=300)
-    dts = np.diff(t)
+print("Done loading data")
 
-    dt = np.mean(dts)
+# visualizing the distribution of dts between samples for real imu data
+plt.figure(figsize=(8, 6), dpi=300)
+dts = np.diff(t)
 
-    hist(dts * 1000, bin_width=1.0)
-    plt.xlabel("dt [ms]")
-    plt.savefig(os.path.join(results_dirpath, "dt_histogram.png"))
-    plt.close()
-    plt.figure(figsize=(8, 6), dpi=300)
-    dts = np.diff(t)
-    hist(dts * 1000, bin_width=1.0, yscale="log")
-    plt.xlabel("dt [ms]")
-    plt.savefig(os.path.join(results_dirpath, "dt_histogram_log.png"))
-    plt.close()
+dt = np.mean(dts)
+
+hist(dts * 1000, bin_width=1.0)
+plt.xlabel("dt [ms]")
+plt.savefig(results_dirpath / "dt_histogram.png")
+plt.close()
+plt.figure(figsize=(8, 6), dpi=300)
+dts = np.diff(t)
+hist(dts * 1000, bin_width=1.0, yscale="log")
+plt.xlabel("dt [ms]")
+plt.savefig(results_dirpath / "dt_histogram_log.png")
+plt.close()
 
 # copying file descriptor for output file to stdout so results that get printed to terminal are also saved in output results file
-sys.stdout = Logger(os.path.join(results_dirpath, "output.txt"))
+sys.stdout = Logger(results_dirpath / "output.txt")
 
 sensors = ["Gyroscope", "Accelerometer"]
-fig, axes = plt.subplots(4, 2, figsize=(8, 8), dpi=300, sharex=True, sharey="col")
+fig, axes = plt.subplots(4, 2, dpi=300, sharex=True, sharey="col")
 for i in range(2):
     sensor = sensors[i]
-    if not USE_CACHE:
-        histogram = plt.figure(figsize=(8, 6), dpi=300)
-        log_histogram = plt.figure(figsize=(8, 6), dpi=300)
+    histogram = plt.figure(figsize=(8, 6), dpi=300)
+    log_histogram = plt.figure(figsize=(8, 6), dpi=300)
 
     for axis_number, axis in enumerate("XYZ"):
         series_label = f"{sensor}_{axis}"
         ####################################################################################################
 
-        results_cache_filepath = os.path.join(results_dirpath, f".{series_label}_cached_allan.csv")  # hidden file
-        if not USE_CACHE:
-            series = data_dict[sensor][axis_number]
-            assert not np.any(np.isnan(series))
-            numTaus = 100
-            avar_object = AVAR(series, dt)
-            avar_object.compute(numTaus)
-            avar_object.cache_allan_variance_results_in_filesystem(results_cache_filepath)
-        else:
-            avar_object = AVAR()
-            avar_object.read_cached_allan_variance_results_from_filesystem(results_cache_filepath)
+        results_cache_filepath = results_dirpath / f".{series_label}_cached_allan.txt"  # hidden file
+        series = data_dict[sensor][axis_number]
+        assert not np.any(np.isnan(series))
+        numTaus = 100
+        avar_object = AVAR(series, dt)
+        avar_object.compute(numTaus)
+        avar_object.cache_allan_variance_results_in_filesystem(results_cache_filepath)
 
         taus, adevs = avar_object.taus, np.sqrt(avar_object.avars)
         sigma_white, sigma_flicker, sigma_walk = avar_object.infer_noise_params()
         adev_lower_bound, adev_upper_bound = avar_object.compute_error_bounds("standard chi", 0.95)
 
-        # fit a non-flicker model
-        # avar_object2 = AVAR()
-        # avar_object2.read_cached_allan_variance_results_from_filesystem(results_cache_filepath)
-        # sigma_white, sigma_flicker, sigma_walk = avar_object2.infer_noise_params(infer_flicker=0)
-
         predicted_adev = predict_adev(taus, sigma_white, sigma_flicker, sigma_walk)
         bias_instability = min(predicted_adev)
-
-        # print(sigma_white, sigma_flicker, bias_instability, sigma_walk)
 
         print("=" * 100)
         print(series_label)
@@ -136,7 +114,7 @@ for i in range(2):
             print(f"\t <==> {sigma_white:.3g} [(rad/s)/sqrt(Hz)]")
             print(f"\t <==> {np.rad2deg(sigma_white):.3g} [(deg/s)/sqrt(Hz)]")
             print(
-                f"\t <==> {sigma_white/sqrt(dt):.3g} [rad/s] additive white noise to angular velocity at samples {dt:.3g}s apart"
+                f"\t <==> {sigma_white/np.sqrt(dt):.3g} [rad/s] additive white noise to angular velocity at samples {dt:.3g}s apart"
             )
 
             print(f"Estimated sigma_flicker: {3600 *np.rad2deg(sigma_flicker):.3g} [deg/hr]")
@@ -148,7 +126,7 @@ for i in range(2):
             print(f"Estimated Angular Rate Random walk: {3600*60*np.rad2deg(sigma_walk):.3g} [(deg/hr) / sqrt(hr)]")
             print(f"\t <==> {sigma_walk:.3g} [(rad/s^2) / sqrt(Hz)]")
             print(
-                f"\t <==> {sigma_walk/sqrt(dt):.3g} [rad/s^2] additive white noise to angular acceleration rate at samples {dt:.3g}s apart"
+                f"\t <==> {sigma_walk/np.sqrt(dt):.3g} [rad/s^2] additive white noise to angular acceleration rate at samples {dt:.3g}s apart"
             )
         else:
             g = 9.81
@@ -157,7 +135,7 @@ for i in range(2):
             print(f"\t <==> {sigma_white*1e3/g:.3g} [mg / sqrt(Hz)]")
             print(f"\t <==> {sigma_white*1e6/g:.3g} [ug / sqrt(Hz)]")
             print(
-                f"\t <==> {sigma_white/sqrt(dt):.3g} [m/s^2] additive white noise to linear acceleration at samples {dt:.3g}s apart"
+                f"\t <==> {sigma_white/np.sqrt(dt):.3g} [m/s^2] additive white noise to linear acceleration at samples {dt:.3g}s apart"
             )
 
             print(f"Estimated sigma_flicker: {sigma_flicker:.3g} [m/s^2]")
@@ -173,7 +151,7 @@ for i in range(2):
             print(f"\t <==> {(sigma_walk*1e3/g)*60:.3g} [mg / sqrt(hr)]")
             print(f"\t <==> {(sigma_walk*1e6/g)*60:.3g} [ug / sqrt(hr)]")
             print(
-                f"\t <==> {sigma_walk/sqrt(dt):.3g} [m/s^3] additive white noise to linear jerk at samples {dt:.3g}s apart"
+                f"\t <==> {sigma_walk/np.sqrt(dt):.3g} [m/s^3] additive white noise to linear jerk at samples {dt:.3g}s apart"
             )
         print("=" * 100)
 
@@ -191,19 +169,17 @@ for i in range(2):
         else:
             units = r"$\mathrm{m/s^2}$"
 
-        if not USE_CACHE:
-            if sensor == "Gyroscope":  # converting units to deg/hr to make the plot more intuitive
-                series = 3600 * np.rad2deg(series)
-            # visualizing the distribution of the time series data
-            plt.figure(histogram)
-            plt.subplot(3, 1, axis_number + 1)
-            hist(series, nbins=100, label=axis)
+        if sensor == "Gyroscope":  # converting units to deg/hr to make the plot more intuitive
+            series = 3600 * np.rad2deg(series)
+        # visualizing the distribution of the time series data
+        plt.figure(histogram)
+        plt.subplot(3, 1, axis_number + 1)
+        hist(series, nbins=100, label=axis)
 
-            plt.figure(log_histogram)
-            plt.subplot(3, 1, axis_number + 1)
-            hist(series, nbins=100, yscale="log", label=axis)
+        plt.figure(log_histogram)
+        plt.subplot(3, 1, axis_number + 1)
+        hist(series, nbins=100, yscale="log", label=axis)
 
-        plt.figure(fig)
         # individual axes
         ax = axes[axis_number][i]
         ax.tick_params(  # disable x ticks
@@ -223,8 +199,6 @@ for i in range(2):
 
         # Overall legend at the top
         if axis_number == 0:
-            if i == 0:
-                ax.legend(bbox_to_anchor=(1.3, 1.15), loc="lower center", prop={"size": 6}, ncols=5, framealpha=1.0)
             ax.set_title(sensor.capitalize(), fontsize=7)
 
         current_miny, current_maxy = ax.get_ylim()
@@ -271,22 +245,32 @@ for i in range(2):
 
     # each axis with fitted model in a subplot
     axes[3][i].set_xlabel(r"Averaging time $\tau$ [s]", fontsize=6)
-    plt.subplots_adjust(hspace=0.03)  # Adjust spacing
 
-    if not USE_CACHE:
-        plt.figure(histogram)
-        plt.xlabel(f"[{units}]")
-        plt.subplot(3, 1, 1)
-        plt.title(sensor.replace("_", " "))
-        plt.savefig(os.path.join(results_dirpath, f"{sensor}_series_histogram.png"))
-        plt.close()
+    # create legend with union of subplots' labels (not all subplots will create white, flicker adn walk lines)
+    h, l = zip(*(ax.get_legend_handles_labels() for ax in axes[:3].flat))
+    by_label = dict(zip(sum(l, []), sum(h, [])))
+    fig.legend(
+        handles=by_label.values(),
+        labels=by_label.keys(),
+        bbox_to_anchor=(0.5, 0.92),
+        loc="lower center",
+        prop={"size": 6},
+        ncols=5,
+        framealpha=1.0,
+    )
+    plt.figure(histogram)
+    plt.xlabel(f"[{units}]")
+    plt.subplot(3, 1, 1)
+    plt.title(sensor.replace("_", " "))
+    plt.savefig(results_dirpath / f"{sensor}_series_histogram.png")
+    plt.close()
 
-        plt.figure(log_histogram)
-        plt.xlabel(f"[{units}]")
-        plt.subplot(3, 1, 1)
-        plt.title(sensor.replace("_", " "))
-        plt.savefig(os.path.join(results_dirpath, f"{sensor}_series_histogram_log.png"))
-        plt.close()
+    plt.figure(log_histogram)
+    plt.xlabel(f"[{units}]")
+    plt.subplot(3, 1, 1)
+    plt.title(sensor.replace("_", " "))
+    plt.savefig(results_dirpath / f"{sensor}_series_histogram_log.png")
+    plt.close()
 
 plt.figure(fig)
 # at this point, the left and right subplots may have differen heights. Need to compute how many decades are on the plot with the largest y range and then adjust bounds for the other column's subplots accordingly
@@ -304,11 +288,12 @@ for row_of_axes in axes:
         ax.set_ylim((10 ** (bottom_y_decade - decade_padding), 10 ** (top_y_decade + decade_padding)))
 
 
+num_hours = int(round(avar_object.N * avar_object.dt / 3600))
 plt.suptitle(
-    f"Allan Deviation (Computed using {int(round(avar_object.N*avar_object.dt/3600))} hours of data collected at {int(round(1/avar_object.dt))} Hz)",
+    f"Allan Deviation (Computed using {num_hours} hour{'s' if num_hours>1 else ''} of data collected at {int(round(1/avar_object.dt))} Hz)",
     fontsize=8,
     # y=0.94,
     y=1,
 )
 
-save_figure(plt.gcf(), results_dirpath, "Allan_dev_model_fit", figure_size=(8, 4.5), bbox_inches="tight")
+save_figure(plt.gcf(), results_dirpath, "Allan_dev_model_fit", figure_size=(6, 4.5), bbox_inches="tight")

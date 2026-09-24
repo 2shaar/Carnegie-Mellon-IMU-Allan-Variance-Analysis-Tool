@@ -1,2 +1,6 @@
 .venv/
 __pycache__/
+**/Allan_Variance_Analysis_Results_*/
+example_IMU_data/
+*.pdf
+*.zip
